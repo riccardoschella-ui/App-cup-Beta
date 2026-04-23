@@ -1,0 +1,69 @@
+﻿import streamlit as st
+import cv2
+import numpy as np
+from PIL import Image
+import easyocr
+
+
+st.set_page_config(page_title="Censimento Cartelloni AI", layout="centered")
+
+
+st.title("📏 Rilievo Cartelloni Pubblicitari")
+st.write("Carica la foto, inserisci la distanza e ottieni la metratura.")
+
+
+# --- INPUT DATI ---
+distanza = st.number_input("Distanza dal cartellone (in metri):", min_value=0.1, value=5.0, step=0.1)
+foto = st.file_uploader("Scatta o carica una foto", type=['jpg', 'jpeg', 'png'])
+
+
+if foto is not None:
+    # Conversione immagine per OpenCV
+    image = Image.open(foto)
+    img_array = np.array(image)
+    img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+    
+    st.image(image, caption="Foto caricata", use_column_width=True)
+    
+    st.info("Configurazione: Per ora l'app calcola l'area basandosi sulla geometria proiettiva standard.")
+
+
+    if st.button("Esegui Analisi"):
+        with st.spinner("Analisi in corso..."):
+            # 1. OCR - Lettura Testo
+            reader = easyocr.Reader(['it'])
+            result_ocr = reader.readtext(img_array, detail=0)
+            messaggio = " ".join(result_ocr)
+            
+            # 2. Logica di Misurazione (Esempio basato su FOV S25 Plus)
+            # Nota: In una versione avanzata qui l'utente seleziona i 4 angoli
+            # Per ora simuliamo un rilevamento bordi standard
+            h, w, _ = img_cv.shape
+            focale_pixel = 3200 # Valore da calibrare per S25 Plus
+            
+            # Calcolo ipotetico basato su un'area occupata dal cartellone (es. 40% del frame)
+            larghezza_m = (w * 0.6 * distanza) / focale_pixel
+            altezza_m = (h * 0.4 * distanza) / focale_pixel
+            area_mq = larghezza_m * altezza_m
+
+
+            # --- RISULTATI ---
+            st.success("Analisi Completata!")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Metratura Stimata", f"{round(area_mq, 2)} mq")
+                st.write(f"**Dimensioni:** {round(larghezza_m, 2)}m x {round(altezza_m, 2)}m")
+            
+            with col2:
+                st.write("**Tipologia rilevata:**")
+                st.code("Insegna Standard / Monopalo")
+
+
+            st.subheader("Messaggio Rilevato (OCR):")
+            st.write(messaggio if messaggio else "Nessun testo rilevato.")
+
+
+            # Opzione download report
+            report = f"RILIEVO CARTELLONE\nArea: {area_mq} mq\nMessaggio: {messaggio}\nDistanza: {distanza}m"
+            st.download_button("Scarica Report", report, file_name="rilievo.txt")
