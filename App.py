@@ -1,69 +1,69 @@
-﻿import streamlit as st
+import streamlit as st
 import cv2
 import numpy as np
-from PIL import Image
 import easyocr
+import math
 
+def applica_arrotondamento(area_reale):
+    """Applica le regole di arrotondamento del manuale Creset."""
+    if area_reale < 0.03: # Sotto i 300cmq non si censice
+        return 0, "Esente ( < 300cmq )"
+    if area_reale <= 1.0:
+        return 1.0, "Arrotondato a 1mq"
+    else:
+        # Arrotondamento al mezzo metro quadrato superiore
+        return math.ceil(area_reale * 2) / 2, "Arrotondato a 0.5mq"
 
-st.set_page_config(page_title="Censimento Cartelloni AI", layout="centered")
-
-
-st.title("📏 Rilievo Cartelloni Pubblicitari")
-st.write("Carica la foto, inserisci la distanza e ottieni la metratura.")
-
-
-# --- INPUT DATI ---
-distanza = st.number_input("Distanza dal cartellone (in metri):", min_value=0.1, value=5.0, step=0.1)
-foto = st.file_uploader("Scatta o carica una foto", type=['jpg', 'jpeg', 'png'])
-
-
-if foto is not None:
-    # Conversione immagine per OpenCV
-    image = Image.open(foto)
-    img_array = np.array(image)
-    img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+def analizza_cartellone_v2(image_array, distanza):
+    # Parametri tecnici S25 Plus
+    FOCALE_PIXEL = 3200 
     
-    st.image(image, caption="Foto caricata", use_column_width=True)
+    # Inizializza OCR
+    reader = easyocr.Reader(['it'])
+    results = reader.readtext(image_array)
     
-    st.info("Configurazione: Per ora l'app calcola l'area basandosi sulla geometria proiettiva standard.")
+    if not results:
+        return None
 
+    # Trova il messaggio con l'area del bounding box più grande
+    # Ogni result è: (coordinate, testo, confidenza)
+    messaggio_principale = max(results, key=lambda x: (x[0][2][0]-x[0][0][0]) * (x[0][2][1]-x[0][0][1]))
+    
+    # Calcolo dimensioni basato sul box del testo più grande
+    box = messaggio_principale[0]
+    width_px = abs(box[1][0] - box[0][0])
+    height_px = abs(box[2][1] - box[1][1])
+    
+    larghezza_m = (width_px * distanza) / FOCALE_PIXEL
+    altezza_m = (height_px * distanza) / FOCALE_PIXEL
+    area_reale = larghezza_m * altezza_m
+    
+    area_fiscale, nota_fiscale = applica_arrotondamento(area_reale)
+    
+    return {
+        "messaggio": messaggio_principale[1],
+        "area_reale": round(area_reale, 3),
+        "area_fiscale": area_fiscale,
+        "nota": nota_fiscale,
+        "esenzione_insegna": "Sì" if area_reale <= 5.0 else "No (Oltre 5mq)" #
+    }
 
-    if st.button("Esegui Analisi"):
-        with st.spinner("Analisi in corso..."):
-            # 1. OCR - Lettura Testo
-            reader = easyocr.Reader(['it'])
-            result_ocr = reader.readtext(img_array, detail=0)
-            messaggio = " ".join(result_ocr)
-            
-            # 2. Logica di Misurazione (Esempio basato su FOV S25 Plus)
-            # Nota: In una versione avanzata qui l'utente seleziona i 4 angoli
-            # Per ora simuliamo un rilevamento bordi standard
-            h, w, _ = img_cv.shape
-            focale_pixel = 3200 # Valore da calibrare per S25 Plus
-            
-            # Calcolo ipotetico basato su un'area occupata dal cartellone (es. 40% del frame)
-            larghezza_m = (w * 0.6 * distanza) / focale_pixel
-            altezza_m = (h * 0.4 * distanza) / focale_pixel
-            area_mq = larghezza_m * altezza_m
+# --- Interfaccia Streamlit ---
+st.title("📏 Censore Professionale ICP")
+dist = st.number_input("Distanza misurata (metri)", 0.5, 50.0, 5.0)
+file = st.file_uploader("Foto Mezzo Pubblicitario")
 
+if file:
+    img = np.array(Image.open(file))
+    res = analizza_cartellone_v2(img, dist)
+    
+    if res:
+        st.subheader(f"Messaggio rilevato: {res['messaggio']}")
+        col1, col2 = st.columns(2)
+        col1.metric("Superficie Reale", f"{res['area_reale']} m²")
+        col2.metric("Superficie Imponibile", f"{res['area_fiscale']} m²")
+        st.info(f"Nota normativa: {res['nota']}")
+        
+        if res['esenzione_insegna'] == "Sì":
+            st.warning("Potenziale Esenzione: Insegna d'esercizio ≤ 5 m²")
 
-            # --- RISULTATI ---
-            st.success("Analisi Completata!")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Metratura Stimata", f"{round(area_mq, 2)} mq")
-                st.write(f"**Dimensioni:** {round(larghezza_m, 2)}m x {round(altezza_m, 2)}m")
-            
-            with col2:
-                st.write("**Tipologia rilevata:**")
-                st.code("Insegna Standard / Monopalo")
-
-
-            st.subheader("Messaggio Rilevato (OCR):")
-            st.write(messaggio if messaggio else "Nessun testo rilevato.")
-
-
-            # Opzione download report
-            report = f"RILIEVO CARTELLONE\nArea: {area_mq} mq\nMessaggio: {messaggio}\nDistanza: {distanza}m"
-            st.download_button("Scarica Report", report, file_name="rilievo.txt")
